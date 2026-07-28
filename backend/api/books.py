@@ -2,12 +2,29 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from services.database import get_conn
-from services.recommender import get_today_book, get_next_book, generate_queue
+from services.recommender import get_today_book, get_next_book, generate_queue, get_today_5
 from services.deepseek import generate_summary, discover_by_category
 import json
 import uuid
 
 router = APIRouter()
+
+
+@router.get("/today5/{user_id}")
+async def get_today5(user_id: str):
+    """获取今日推荐5本供用户选择"""
+    books = get_today_5(user_id)
+    if not books:
+        raise HTTPException(404, "暂无推荐，请先完成问卷")
+    from datetime import date
+    return {"books": books, "date": str(date.today())}
+
+
+@router.post("/select/{user_id}/{book_id}")
+async def select_book(user_id: str, book_id: str):
+    """用户从5本中选一本，记录阅读"""
+    _record_history(user_id, book_id, is_daily=True)
+    return {"ok": True}
 
 
 @router.get("/today/{user_id}")

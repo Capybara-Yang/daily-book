@@ -93,6 +93,33 @@ def generate_queue(user_id: str, queue_size: int = 10) -> list:
     return queue
 
 
+def get_today_5(user_id: str) -> list:
+    """获取今日推荐5本书供用户选择"""
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    # 检查队列是否存在
+    cursor.execute("SELECT COUNT(*) as cnt FROM daily_queue WHERE user_id=?", (user_id,))
+    if cursor.fetchone()["cnt"] == 0:
+        conn.close()
+        generate_queue(user_id, queue_size=15)
+        conn = get_conn()
+        cursor = conn.cursor()
+
+    # 取前5本
+    cursor.execute("""
+        SELECT b.* FROM daily_queue q
+        JOIN books b ON q.book_id = b.id
+        WHERE q.user_id=?
+        ORDER BY q.position
+        LIMIT 5
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [_row_to_book(r) for r in rows]
+
+
 def get_today_book(user_id: str) -> dict:
     """获取今日推荐"""
     conn = get_conn()
