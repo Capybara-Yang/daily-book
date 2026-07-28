@@ -106,15 +106,14 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         conn = get_conn()
         cursor = conn.cursor()
 
-    # 如果offset超出范围，重新生成队列并从头开始
+    # 如果offset超出范围，用AI生成新书补充队列
     cursor.execute("SELECT MAX(position) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
     max_pos = cursor.fetchone()["max_pos"]
     if max_pos is not None and offset >= max_pos + 1:
-        conn.close()
-        generate_queue(user_id, queue_size=30)
-        conn = get_conn()
-        cursor = conn.cursor()
-        offset = 0  # 重置到开头
+        # 队列用完，AI生成新书补充
+        _expand_queue_with_ai(user_id, conn, cursor)
+        conn.commit()
+        # 不重置offset，继续往后取
 
     # 取5本，带offset
     cursor.execute("""
@@ -126,19 +125,85 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
     """, (user_id, offset))
     rows = cursor.fetchall()
     
-    # 如果这页不够5本（到了末尾），从头补齐
-    if len(rows) < 5:
+    # 如果这页不够5本，补充更多
+    while len(rows) < 5:
+        _expand_queue_with_ai(user_id, conn, cursor)
+        conn.commit()
         cursor.execute("""
             SELECT b.* FROM daily_queue q
             JOIN books b ON q.book_id = b.id
             WHERE q.user_id=?
             ORDER BY q.position
-            LIMIT ?
-        """, (user_id, 5 - len(rows)))
-        rows.extend(cursor.fetchall())
+            LIMIT 5 OFFSET ?
+        """, (user_id, offset))
+        rows = cursor.fetchall()
+        break  # 防止死循环，最多补充一次
     
     conn.close()
     return [_row_to_book(r) for r in rows]
+
+
+def _expand_queue_with_ai(user_id: str, conn, cursor):
+    """用AI生成新书并补充到队列"""
+    import json as _json
+    import uuid as _uuid
+    from services.deepseek import generate_summary
+
+    # 获取用户问卷偏好
+    survey = get_user_survey(user_id)
+    categories = survey.get("categories", []) if survey else []
+    difficulty = survey.get("difficulty", "medium") if survey else "medium"
+
+    # 已有书的书名
+    cursor.execute("SELECT title FROM books")
+    existing_titles = set(r["title"] for r in cursor.fetchall())
+
+    # 调AI推荐新书
+    from services.deepseek import discover_by_category
+    import random as _random
+    cat = _random.choice(categories) if categories else "经典好书"
+    new_books = discover_by_category(cat)
+
+    added = 0
+    for nb in new_books:
+        title = nb.get("title", "")
+        author = nb.get("author", "")
+        if title in existing_titles:
+            continue
+
+        # 生成摘要
+        try:
+            summary = generate_summary(title, author)
+        except Exception:
+            continue
+
+        book_id = str(_uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO books (id, title, author, category, one_liner, concepts, quotes, story_summary, chapters, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated')
+        """, (
+            book_id, title, author, cat,
+            summary.get("one_liner", ""),
+            _json.dumps(summary.get("concepts", []), ensure_ascii=False),
+            _json.dumps(summary.get("quotes", []), ensure_ascii=False),
+            summary.get("story_summary", ""),
+            _json.dumps(summary.get("chapters", []), ensure_ascii=False),
+        ))
+
+        # 加到队列末尾
+        cursor.execute("SELECT COALESCE(MAX(position), -1) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
+        next_pos = cursor.fetchone()["max_pos"] + 1
+        cursor.execute("""
+            INSERT INTO daily_queue (user_id, book_id, position, is_today)
+            VALUES (?, ?, ?, 0)
+        """, (user_id, book_id, next_pos))
+
+        existing_titles.add(title)
+        added += 1
+        if added >= 5:
+            break
+
+    print(f"[Recommender] AI补充了 {added} 本新书到队列")
 
 
 def get_today_book(user_id: str) -> dict:
