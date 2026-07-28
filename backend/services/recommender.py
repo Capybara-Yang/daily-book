@@ -94,7 +94,7 @@ def generate_queue(user_id: str, queue_size: int = 10) -> list:
 
 
 def get_today_5(user_id: str, offset: int = 0) -> list:
-    """获取今日推荐5本书供用户选择，offset控制翻页"""
+    """获取今日推荐5本书，每次换一批生成1本新书替换1本旧书"""
     conn = get_conn()
     cursor = conn.cursor()
 
@@ -106,55 +106,63 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         conn = get_conn()
         cursor = conn.cursor()
 
-    # 队列剩余不足10本时，后台线程AI补充新书（不阻塞当前请求）
-    cursor.execute("SELECT MAX(position) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
-    max_pos = cursor.fetchone()["max_pos"]
-    remaining = (max_pos + 1) - offset if max_pos is not None else 0
-    
-    if remaining <= 10:
-        import threading
-        t = threading.Thread(target=_async_expand, args=(user_id,), daemon=True)
-        t.start()
-
-    # 取5本，带offset
-    cursor.execute("""
-        SELECT b.* FROM daily_queue q
-        JOIN books b ON q.book_id = b.id
-        WHERE q.user_id=?
-        ORDER BY q.position
-        LIMIT 5 OFFSET ?
-    """, (user_id, offset))
-    rows = cursor.fetchall()
-    
-    # 不够5本就从头补（循环），不卡用户
-    if len(rows) < 5:
+    # offset>0 说明用户点了换一批，生成新书替换
+    if offset > 0:
+        # 先看队列里有多少本
+        cursor.execute("SELECT COUNT(*) as cnt FROM daily_queue WHERE user_id=?", (user_id,))
+        total = cursor.fetchone()["cnt"]
+        
+        # 从offset位置开始取5本
         cursor.execute("""
             SELECT b.* FROM daily_queue q
             JOIN books b ON q.book_id = b.id
             WHERE q.user_id=?
             ORDER BY q.position
-            LIMIT ?
-        """, (user_id, 5 - len(rows)))
-        rows.extend(cursor.fetchall())
-    
+            LIMIT 5 OFFSET ?
+        """, (user_id, offset))
+        rows = cursor.fetchall()
+        
+        # 不够5本时，AI生成1本新书补充
+        if len(rows) < 5:
+            _expand_queue_with_ai(user_id, conn, cursor, count=2)
+            conn.commit()
+            cursor.execute("""
+                SELECT b.* FROM daily_queue q
+                JOIN books b ON q.book_id = b.id
+                WHERE q.user_id=?
+                ORDER BY q.position
+                LIMIT 5 OFFSET ?
+            """, (user_id, offset))
+            rows = cursor.fetchall()
+        
+        # 还是不够就从头补
+        if len(rows) < 5:
+            cursor.execute("""
+                SELECT b.* FROM daily_queue q
+                JOIN books b ON q.book_id = b.id
+                WHERE q.user_id=?
+                ORDER BY q.position
+                LIMIT ?
+            """, (user_id, 5 - len(rows)))
+            rows.extend(cursor.fetchall())
+        
+        conn.close()
+        return [_row_to_book(r) for r in rows]
+
+    # 第一次加载，取前5本
+    cursor.execute("""
+        SELECT b.* FROM daily_queue q
+        JOIN books b ON q.book_id = b.id
+        WHERE q.user_id=?
+        ORDER BY q.position
+        LIMIT 5
+    """, (user_id,))
+    rows = cursor.fetchall()
     conn.close()
     return [_row_to_book(r) for r in rows]
 
 
-def _async_expand(user_id):
-    """后台线程：AI生成新书补充队列"""
-    try:
-        conn = get_conn()
-        cursor = conn.cursor()
-        _expand_queue_with_ai(user_id, conn, cursor)
-        conn.commit()
-        conn.close()
-        print(f"[Recommender] 后台AI补充完成，用户 {user_id}")
-    except Exception as e:
-        print(f"[Recommender] 后台补充失败: {e}")
-
-
-def _expand_queue_with_ai(user_id: str, conn, cursor):
+def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
     """用AI生成新书并补充到队列"""
     import json as _json
     import uuid as _uuid
@@ -177,6 +185,8 @@ def _expand_queue_with_ai(user_id: str, conn, cursor):
 
     added = 0
     for nb in new_books:
+        if added >= count:
+            break
         title = nb.get("title", "")
         author = nb.get("author", "")
         if title in existing_titles:
@@ -211,8 +221,6 @@ def _expand_queue_with_ai(user_id: str, conn, cursor):
 
         existing_titles.add(title)
         added += 1
-        if added >= 5:
-            break
 
     print(f"[Recommender] AI补充了 {added} 本新书到队列")
 
