@@ -36,11 +36,19 @@ export const useHistoryStore = create(
   persist(
     (set, get) => ({
       history: [],
+      readBooks: [],
       addToHistory: (book) => {
         const { history } = get()
         const filtered = history.filter(b => b.id !== book.id)
         set({ history: [book, ...filtered].slice(0, 50) })
       },
+      markAsRead: (bookId) => {
+        const { readBooks } = get()
+        if (!readBooks.includes(bookId)) {
+          set({ readBooks: [...readBooks, bookId] })
+        }
+      },
+      isRead: (bookId) => get().readBooks.includes(bookId),
     }),
     { name: 'daily-book-history' }
   )

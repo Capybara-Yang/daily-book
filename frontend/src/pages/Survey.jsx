@@ -18,6 +18,12 @@ const PURPOSES = [
   '提升技能', '拓宽视野', '解决问题', '放松享受'
 ]
 
+const DIFFICULTIES = [
+  { value: 'easy', label: '轻松易读', desc: '短小精悍、语言通俗，适合放松时读' },
+  { value: 'medium', label: '适中', desc: '有一定深度但不过于晦涩' },
+  { value: 'hard', label: '深度挑战', desc: '经典厚重的书，需要认真啃' },
+]
+
 export default function Survey() {
   const navigate = useNavigate()
   const { setUserId, setSurvey } = useUserStore()
@@ -27,6 +33,7 @@ export default function Survey() {
   const [pace, setPace] = useState('daily')
   const [exploreRatio, setExploreRatio] = useState(0.4)
   const [purposes, setPurposes] = useState([])
+  const [difficulty, setDifficulty] = useState('medium')
   const [submitting, setSubmitting] = useState(false)
 
   const toggleCategory = (cat) => {
@@ -49,6 +56,7 @@ export default function Survey() {
         pace,
         explore_ratio: exploreRatio,
         purposes,
+        difficulty,
       })
       setUserId(res.data.user_id)
       setSurvey(res.data.survey)
@@ -144,7 +152,33 @@ export default function Survey() {
       ),
       canNext: true,
     },
-    // Step 3: 阅读目的
+    // Step 3: 阅读难度
+    {
+      title: '你喜欢什么难度的书？',
+      subtitle: '有些书轻松好读，有些书需要认真啃',
+      content: (
+        <div className="space-y-3">
+          {DIFFICULTIES.map(d => (
+            <button
+              key={d.value}
+              onClick={() => setDifficulty(d.value)}
+              className={`w-full p-4 rounded-xl border-2 text-left transition-all ${
+                difficulty === d.value
+                  ? 'border-primary-500 bg-primary-50'
+                  : 'border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className={`text-sm font-bold ${difficulty === d.value ? 'text-primary-700' : 'text-slate-700'}`}>
+                {d.label}
+              </div>
+              <div className="text-xs text-slate-500 mt-1">{d.desc}</div>
+            </button>
+          ))}
+        </div>
+      ),
+      canNext: true,
+    },
+    // Step 4: 阅读目的
     {
       title: '你的阅读目的？',
       subtitle: '可多选，帮助我们更好地匹配',

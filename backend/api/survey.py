@@ -17,6 +17,7 @@ class SurveyRequest(BaseModel):
     pace: str  # 阅读节奏: "daily" | "two-day" | "weekly"
     explore_ratio: float  # 探索比例 0-1
     purposes: List[str]  # 阅读目的
+    difficulty: str = "medium"  # 阅读难度: "easy" | "medium" | "hard"
 
 
 @router.post("/submit")
@@ -29,6 +30,7 @@ async def submit_survey(req: SurveyRequest):
         "pace": req.pace,
         "explore_ratio": req.explore_ratio,
         "purposes": req.purposes,
+        "difficulty": req.difficulty,
     }
 
     save_survey(user_id, survey)
