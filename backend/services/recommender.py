@@ -106,14 +106,15 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         conn = get_conn()
         cursor = conn.cursor()
 
-    # 如果offset超出范围，用AI生成新书补充队列
+    # 检查剩余量，不够就提前AI补充
     cursor.execute("SELECT MAX(position) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
     max_pos = cursor.fetchone()["max_pos"]
-    if max_pos is not None and offset >= max_pos + 1:
-        # 队列用完，AI生成新书补充
+    remaining = (max_pos + 1) - offset if max_pos is not None else 0
+    
+    if remaining <= 10:
+        # 队列快用完了，AI补充5本新书
         _expand_queue_with_ai(user_id, conn, cursor)
         conn.commit()
-        # 不重置offset，继续往后取
 
     # 取5本，带offset
     cursor.execute("""
@@ -125,8 +126,8 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
     """, (user_id, offset))
     rows = cursor.fetchall()
     
-    # 如果这页不够5本，补充更多
-    while len(rows) < 5:
+    # 如果还是不够，再补一次
+    if len(rows) < 5:
         _expand_queue_with_ai(user_id, conn, cursor)
         conn.commit()
         cursor.execute("""
@@ -137,7 +138,6 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
             LIMIT 5 OFFSET ?
         """, (user_id, offset))
         rows = cursor.fetchall()
-        break  # 防止死循环，最多补充一次
     
     conn.close()
     return [_row_to_book(r) for r in rows]
