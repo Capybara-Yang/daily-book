@@ -51,14 +51,24 @@ export default function SummaryView({ book }) {
             金句
           </h3>
           <div className="space-y-3">
-            {book.quotes.map((quote, i) => (
-              <blockquote
-                key={i}
-                className="border-l-4 border-amber-400 pl-4 text-slate-700 italic leading-relaxed"
-              >
-                {quote}
-              </blockquote>
-            ))}
+            {book.quotes.map((quote, i) => {
+              const parts = quote.split('\n')
+              const zh = parts[0]
+              const en = parts.slice(1).join('\n').trim()
+              return (
+                <blockquote
+                  key={i}
+                  className="border-l-4 border-amber-400 pl-4 text-slate-700 leading-relaxed"
+                >
+                  <p className="italic">{zh}</p>
+                  {en && (
+                    <p className="text-xs text-slate-500 mt-2 not-italic border-t border-amber-200 pt-2">
+                      {en}
+                    </p>
+                  )}
+                </blockquote>
+              )
+            })}
           </div>
         </div>
       )}
