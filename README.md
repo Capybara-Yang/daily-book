@@ -4,10 +4,9 @@
 
 ## 在线预览
 
-👉 **[点击打开](https://complex-example-mid-thoroughly.trycloudflare.com/)**
+👉 **[点击打开 Railway 部署版](https://daily-book-production.up.railway.app/)**
 
-> 当前为 Mock 模式（未配置 DeepSeek API Key），搜索和对话返回预设内容。
-> 填写 Key 后自动启用真实 AI。所有功能（问卷、推荐、收藏、历史）均可正常使用。
+> Railway 免费额度：30 天或 $5 试用，之后需要升级或迁移。
 
 ## 功能
 
