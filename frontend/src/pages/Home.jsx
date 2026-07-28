@@ -13,12 +13,14 @@ export default function Home() {
   const [books, setBooks] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [offset, setOffset] = useState(0)
 
-  const loadToday5 = async () => {
+  const loadToday5 = async (newOffset = 0) => {
     setLoading(true)
     try {
-      const res = await api.get(`/books/today5/${userId}`)
+      const res = await api.get(`/books/today5/${userId}?offset=${newOffset}`)
       setBooks(res.data.books || [])
+      setOffset(newOffset)
     } catch (err) {
       console.error(err)
     } finally {
@@ -27,21 +29,17 @@ export default function Home() {
   }
 
   const handleSelectBook = async (book) => {
-    // 打卡
     checkin()
-    // 记录历史
     addToHistory(book)
-    // 通知后端
     try {
       await api.post(`/books/select/${userId}/${book.id}`)
     } catch (e) {}
-    // 跳转详情
     navigate(`/book/${book.id}`)
   }
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    await loadToday5()
+    await loadToday5(offset + 5)
     setRefreshing(false)
   }
 

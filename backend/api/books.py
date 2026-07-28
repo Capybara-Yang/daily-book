@@ -11,9 +11,9 @@ router = APIRouter()
 
 
 @router.get("/today5/{user_id}")
-async def get_today5(user_id: str):
-    """获取今日推荐5本供用户选择"""
-    books = get_today_5(user_id)
+async def get_today5(user_id: str, offset: int = 0):
+    """获取今日推荐5本供用户选择，offset翻页"""
+    books = get_today_5(user_id, offset)
     if not books:
         raise HTTPException(404, "暂无推荐，请先完成问卷")
     from datetime import date

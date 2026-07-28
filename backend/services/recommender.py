@@ -93,8 +93,8 @@ def generate_queue(user_id: str, queue_size: int = 10) -> list:
     return queue
 
 
-def get_today_5(user_id: str) -> list:
-    """获取今日推荐5本书供用户选择"""
+def get_today_5(user_id: str, offset: int = 0) -> list:
+    """获取今日推荐5本书供用户选择，offset控制翻页"""
     conn = get_conn()
     cursor = conn.cursor()
 
@@ -102,18 +102,28 @@ def get_today_5(user_id: str) -> list:
     cursor.execute("SELECT COUNT(*) as cnt FROM daily_queue WHERE user_id=?", (user_id,))
     if cursor.fetchone()["cnt"] == 0:
         conn.close()
-        generate_queue(user_id, queue_size=15)
+        generate_queue(user_id, queue_size=30)
         conn = get_conn()
         cursor = conn.cursor()
 
-    # 取前5本
+    # 如果offset超出范围，重新打乱队列
+    cursor.execute("SELECT MAX(position) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
+    max_pos = cursor.fetchone()["max_pos"]
+    if max_pos and offset >= max_pos + 1:
+        # 队列用完，重新生成
+        conn.close()
+        generate_queue(user_id, queue_size=30)
+        conn = get_conn()
+        cursor = conn.cursor()
+
+    # 取5本，带offset
     cursor.execute("""
         SELECT b.* FROM daily_queue q
         JOIN books b ON q.book_id = b.id
         WHERE q.user_id=?
         ORDER BY q.position
-        LIMIT 5
-    """, (user_id,))
+        LIMIT 5 OFFSET ?
+    """, (user_id, offset))
     rows = cursor.fetchall()
     conn.close()
 
