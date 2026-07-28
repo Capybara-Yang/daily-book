@@ -1,0 +1,108 @@
+import { useState, useEffect } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useUserStore, useFavoritesStore } from '../store/userStore'
+import api from '../api/client'
+import SummaryView from '../components/SummaryView'
+import ChatBox from '../components/ChatBox'
+
+export default function BookDetail() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const { userId } = useUserStore()
+  const { favorites, toggleFavorite } = useFavoritesStore()
+
+  const [book, setBook] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // 从历史或 API 获取书籍
+    const fetchBook = async () => {
+      try {
+        // 先尝试从 history 拿
+        const historyRes = await api.get(`/books/history/${userId}`)
+        const found = historyRes.data.find(b => b.id === id)
+        if (found) {
+          setBook(found)
+          setLoading(false)
+          return
+        }
+        // 否则从全部书库找
+        const allRes = await api.get('/books/all')
+        const foundBook = allRes.data.find(b => b.id === id)
+        if (foundBook) setBook(foundBook)
+      } catch (err) {
+        console.error(err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchBook()
+  }, [id, userId])
+
+  const isFav = favorites.includes(id)
+
+  if (loading) {
+    return (
+      <div className="px-6 py-8">
+        <div className="card animate-pulse">
+          <div className="h-8 bg-slate-200 rounded w-3/4 mb-3"></div>
+          <div className="h-4 bg-slate-200 rounded w-1/2 mb-6"></div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!book) {
+    return (
+      <div className="px-6 py-8 text-center text-slate-500">
+        <p>找不到这本书</p>
+        <button onClick={() => navigate(-1)} className="btn-secondary mt-4">
+          返回
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-6 py-8">
+      {/* 返回按钮 */}
+      <button
+        onClick={() => navigate(-1)}
+        className="text-slate-400 text-sm mb-4 flex items-center gap-1"
+      >
+        ← 返回
+      </button>
+
+      {/* 书籍标题 */}
+      <div className="mb-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <h1 className="text-2xl font-bold text-slate-800 mb-2">
+              《{book.title}》
+            </h1>
+            <p className="text-slate-500">{book.author}</p>
+          </div>
+          <button
+            onClick={() => toggleFavorite(book.id)}
+            className="flex-shrink-0 w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-xl"
+          >
+            {isFav ? '⭐' : '☆'}
+          </button>
+        </div>
+        {book.category && (
+          <span className="tag bg-primary-50 text-primary-600 mt-3">
+            {book.category}
+          </span>
+        )}
+      </div>
+
+      {/* 摘要 */}
+      <SummaryView book={book} />
+
+      {/* 对话 */}
+      <div className="mt-6">
+        <ChatBox book={book} />
+      </div>
+    </div>
+  )
+}
