@@ -15,6 +15,16 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // 强制清除旧Service Worker，确保更新
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+          for (var registration of registrations) {
+            registration.unregister();
+          }
+        });
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
