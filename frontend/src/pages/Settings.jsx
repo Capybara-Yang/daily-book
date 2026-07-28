@@ -140,14 +140,22 @@ export default function Settings() {
       {/* 关于 */}
       <div className="card mb-6">
         <h3 className="text-sm font-bold text-slate-500 mb-3 uppercase tracking-wide">
-          关于
+          更多
         </h3>
+        <button
+          onClick={() => navigate('/upload')}
+          className="w-full py-3 text-left text-sm text-slate-700 flex items-center justify-between hover:text-primary-600 transition-colors"
+        >
+          <span>📤 上传文档提取重点</span>
+          <span className="text-slate-400">→</span>
+        </button>
+      </div>
+
+      {/* 版本信息 */}
+      <div className="card mb-6">
         <p className="text-sm text-slate-600 leading-relaxed">
-          每日一书 v1.0<br />
-          每天推荐一本好书，AI 为你提炼精华。
-        </p>
-        <p className="text-xs text-slate-400 mt-3">
-          提示：在 backend/.env 填写 DEEPSEEK_API_KEY 后，对话和搜索功能将使用真实 AI
+          每日一书 v1.3<br />
+          每天推荐好书，AI 为你提炼精华。
         </p>
       </div>
 
