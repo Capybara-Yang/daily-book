@@ -173,9 +173,27 @@ def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
     categories = survey.get("categories", []) if survey else []
     difficulty = survey.get("difficulty", "medium") if survey else "medium"
 
-    # 已有书的书名
+    # 已有书的书名（做模糊去重，防止"1984"和"一九八四"重复）
     cursor.execute("SELECT title FROM books")
-    existing_titles = set(r["title"] for r in cursor.fetchall())
+    existing_titles = [r["title"] for r in cursor.fetchall()]
+
+    def is_duplicate(title):
+        """检查书名是否重复（包含匹配）"""
+        for existing in existing_titles:
+            # 完全相同
+            if title == existing:
+                return True
+            # 去掉空格标点后相同
+            import re as _re
+            clean_t = _re.sub(r'[\s，。、！？《》\[\]（）]', '', title).lower()
+            clean_e = _re.sub(r'[\s，。、！？《》\[\]（）]', '', existing).lower()
+            if clean_t == clean_e:
+                return True
+            # 一个是另一个的子串
+            if len(clean_t) > 1 and len(clean_e) > 1:
+                if clean_t in clean_e or clean_e in clean_t:
+                    return True
+        return False
 
     # 调AI推荐新书
     from services.deepseek import discover_by_category
@@ -189,7 +207,7 @@ def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
             break
         title = nb.get("title", "")
         author = nb.get("author", "")
-        if title in existing_titles:
+        if is_duplicate(title):
             continue
 
         # 生成摘要
@@ -219,10 +237,36 @@ def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
             VALUES (?, ?, ?, 0)
         """, (user_id, book_id, next_pos))
 
-        existing_titles.add(title)
+        # 持久化到 GitHub（后台异步，不阻塞）
+        import threading
+        book_for_github = {
+            "id": book_id, "title": title, "author": author,
+            "category": cat, "one_liner": summary.get("one_liner", ""),
+            "concepts": summary.get("concepts", []),
+            "quotes": summary.get("quotes", []),
+            "story_summary": summary.get("story_summary", ""),
+            "chapters": summary.get("chapters", []),
+        }
+        t = threading.Thread(
+            target=_save_to_github_safe,
+            args=(book_for_github,),
+            daemon=True
+        )
+        t.start()
+
+        existing_titles.append(title)
         added += 1
 
     print(f"[Recommender] AI补充了 {added} 本新书到队列")
+
+
+def _save_to_github_safe(book_data):
+    """安全地保存到GitHub，失败不影响主流程"""
+    try:
+        from services.github_sync import save_book_to_github
+        save_book_to_github(book_data)
+    except Exception as e:
+        print(f"[GitHub] 保存失败（不影响使用）: {e}")
 
 
 def get_today_book(user_id: str) -> dict:
