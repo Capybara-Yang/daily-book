@@ -60,9 +60,13 @@ if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
     # PWA 相关文件
-    @app.get("/manifest.webmanifest")
+    @app.get("/manifest.json")
     async def manifest():
-        return FileResponse(FRONTEND_DIST / "manifest.webmanifest")
+        return FileResponse(FRONTEND_DIST / "manifest.json")
+
+    @app.get("/manifest.webmanifest")
+    async def manifest_old():
+        return FileResponse(FRONTEND_DIST / "manifest.json")
 
     @app.get("/sw.js")
     async def sw():
