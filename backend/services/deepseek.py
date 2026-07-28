@@ -11,8 +11,11 @@ from dotenv import load_dotenv
 ENV_PATH = Path(__file__).parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
-USE_MOCK = not os.getenv("DEEPSEEK_API_KEY")
-print(f"[DeepSeek] 模式: {'Mock' if USE_MOCK else '真实 API'}, Key: {os.getenv('DEEPSEEK_API_KEY','')[:10] if not USE_MOCK else '无'}")
+# 优先从环境变量读取，否则使用内置 Key（注意：公开仓库会暴露此 Key）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-3411b5d1944a4df3ac1fb59da6ad57ce"
+
+USE_MOCK = not DEEPSEEK_API_KEY
+print(f"[DeepSeek] 模式: {'Mock' if USE_MOCK else '真实 API'}, Key: {DEEPSEEK_API_KEY[:10] if not USE_MOCK else '无'}")
 
 if not USE_MOCK:
     import httpx
@@ -20,7 +23,7 @@ if not USE_MOCK:
     # 沙盒环境 SSL 证书有问题，禁用验证
     http_client = httpx.Client(verify=False)
     client = OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=DEEPSEEK_API_KEY,
         base_url="https://api.deepseek.com",
         http_client=http_client
     )
