@@ -106,6 +106,16 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         conn = get_conn()
         cursor = conn.cursor()
 
+    # 队列剩余不足10本时，后台线程AI补充新书（不阻塞当前请求）
+    cursor.execute("SELECT MAX(position) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
+    max_pos = cursor.fetchone()["max_pos"]
+    remaining = (max_pos + 1) - offset if max_pos is not None else 0
+    
+    if remaining <= 10:
+        import threading
+        t = threading.Thread(target=_async_expand, args=(user_id,), daemon=True)
+        t.start()
+
     # 取5本，带offset
     cursor.execute("""
         SELECT b.* FROM daily_queue q
@@ -115,23 +125,33 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         LIMIT 5 OFFSET ?
     """, (user_id, offset))
     rows = cursor.fetchall()
-    conn.close()
-
-    # 如果不够5本，从头开始（循环）
+    
+    # 不够5本就从头补（循环），不卡用户
     if len(rows) < 5:
-        conn = get_conn()
-        cursor = conn.cursor()
         cursor.execute("""
             SELECT b.* FROM daily_queue q
             JOIN books b ON q.book_id = b.id
             WHERE q.user_id=?
             ORDER BY q.position
-            LIMIT 5
-        """, (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
-
+            LIMIT ?
+        """, (user_id, 5 - len(rows)))
+        rows.extend(cursor.fetchall())
+    
+    conn.close()
     return [_row_to_book(r) for r in rows]
+
+
+def _async_expand(user_id):
+    """后台线程：AI生成新书补充队列"""
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+        _expand_queue_with_ai(user_id, conn, cursor)
+        conn.commit()
+        conn.close()
+        print(f"[Recommender] 后台AI补充完成，用户 {user_id}")
+    except Exception as e:
+        print(f"[Recommender] 后台补充失败: {e}")
 
 
 def _expand_queue_with_ai(user_id: str, conn, cursor):
