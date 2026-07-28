@@ -106,15 +106,15 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         conn = get_conn()
         cursor = conn.cursor()
 
-    # 如果offset超出范围，重新打乱队列
+    # 如果offset超出范围，重新生成队列并从头开始
     cursor.execute("SELECT MAX(position) as max_pos FROM daily_queue WHERE user_id=?", (user_id,))
     max_pos = cursor.fetchone()["max_pos"]
-    if max_pos and offset >= max_pos + 1:
-        # 队列用完，重新生成
+    if max_pos is not None and offset >= max_pos + 1:
         conn.close()
         generate_queue(user_id, queue_size=30)
         conn = get_conn()
         cursor = conn.cursor()
+        offset = 0  # 重置到开头
 
     # 取5本，带offset
     cursor.execute("""
@@ -125,8 +125,19 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         LIMIT 5 OFFSET ?
     """, (user_id, offset))
     rows = cursor.fetchall()
+    
+    # 如果这页不够5本（到了末尾），从头补齐
+    if len(rows) < 5:
+        cursor.execute("""
+            SELECT b.* FROM daily_queue q
+            JOIN books b ON q.book_id = b.id
+            WHERE q.user_id=?
+            ORDER BY q.position
+            LIMIT ?
+        """, (user_id, 5 - len(rows)))
+        rows.extend(cursor.fetchall())
+    
     conn.close()
-
     return [_row_to_book(r) for r in rows]
 
 

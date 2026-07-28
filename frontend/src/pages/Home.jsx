@@ -39,8 +39,25 @@ export default function Home() {
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    await loadToday5(offset + 5)
-    setRefreshing(false)
+    const newOffset = offset + 5
+    try {
+      const res = await api.get(`/books/today5/${userId}?offset=${newOffset}`)
+      const newBooks = res.data.books || []
+      // 检查是否和当前书完全重复
+      const oldIds = books.map(b => b.id).sort().join(',')
+      const newIds = newBooks.map(b => b.id).sort().join(',')
+      if (newIds === oldIds) {
+        // 完全重复，从头开始
+        await loadToday5(0)
+      } else {
+        setBooks(newBooks)
+        setOffset(newOffset)
+      }
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   useEffect(() => {
