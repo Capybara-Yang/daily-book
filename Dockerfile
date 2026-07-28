@@ -1,8 +1,8 @@
 # ===== 阶段1: 构建前端 =====
 FROM node:22-slim AS frontend-builder
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/pnpm-lock.yaml* ./
-RUN npm install -g pnpm && pnpm install --frozen-lockfile || pnpm install
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN npm install -g pnpm && pnpm install --frozen-lockfile
 COPY frontend/ ./
 RUN pnpm build
 
@@ -12,7 +12,7 @@ WORKDIR /app
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc && rm -rf /var/lib/apt/lists/*
+    gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 
 # 安装Python依赖
 COPY backend/requirements.txt ./
