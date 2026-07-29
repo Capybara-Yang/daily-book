@@ -174,6 +174,10 @@ def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
             break
         title = nb.get("title", "")
         author = nb.get("author", "")
+        # 过滤 Mock 数据（discover_by_category 在 API 失败时返回占位数据）
+        if author == "佚名" or "入门一" in title or "入门二" in title:
+            print(f"[Recommender] 跳过 Mock 数据: {title}")
+            continue
         if is_duplicate(title):
             continue
 
@@ -181,6 +185,11 @@ def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
         try:
             summary = generate_summary(title, author)
         except Exception:
+            continue
+
+        # Mock 模式的摘要没有 chapters 字段，跳过
+        if not summary.get("chapters"):
+            print(f"[Recommender] 《{title}》摘要无章节（可能是Mock），跳过")
             continue
 
         book_id = str(_uuid.uuid4())[:8]

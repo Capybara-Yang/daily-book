@@ -17,6 +17,7 @@ load_dotenv()
 from api import books, chat, survey, user, upload
 from services.database import init_db
 from services.scheduler import start_scheduler
+from services.deepseek import USE_MOCK
 
 # 前端静态文件路径
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -51,7 +52,7 @@ app.include_router(upload.router, prefix="/api/upload", tags=["上传"])
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "mock_mode": not os.getenv("DEEPSEEK_API_KEY")}
+    return {"status": "ok", "mock_mode": USE_MOCK}
 
 
 # 托管前端静态文件（PWA 资源）
@@ -89,7 +90,7 @@ else:
         return {
             "name": "每日一书 API",
             "version": "1.0.0",
-            "mock_mode": not os.getenv("DEEPSEEK_API_KEY"),
+            "mock_mode": USE_MOCK,
             "docs": "/docs",
             "note": "前端未构建，请先 cd frontend && pnpm build"
         }
