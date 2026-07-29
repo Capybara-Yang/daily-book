@@ -94,7 +94,7 @@ def generate_queue(user_id: str, queue_size: int = 10) -> list:
 
 
 def get_today_5(user_id: str, offset: int = 0) -> list:
-    """获取今日推荐5本书，每次换一批生成1本新书替换1本旧书"""
+    """获取今日推荐5本书，每次换一批随机抽不同的书"""
     conn = get_conn()
     cursor = conn.cursor()
 
@@ -106,58 +106,25 @@ def get_today_5(user_id: str, offset: int = 0) -> list:
         conn = get_conn()
         cursor = conn.cursor()
 
-    # offset>0 说明用户点了换一批，生成新书替换
-    if offset > 0:
-        # 先看队列里有多少本
-        cursor.execute("SELECT COUNT(*) as cnt FROM daily_queue WHERE user_id=?", (user_id,))
-        total = cursor.fetchone()["cnt"]
-        
-        # 从offset位置开始取5本
+    if offset == 0:
+        # 第一次：取���5本
         cursor.execute("""
             SELECT b.* FROM daily_queue q
             JOIN books b ON q.book_id = b.id
             WHERE q.user_id=?
             ORDER BY q.position
-            LIMIT 5 OFFSET ?
-        """, (user_id, offset))
+            LIMIT 5
+        """, (user_id,))
         rows = cursor.fetchall()
-        
-        # 不够5本时，AI生成1本新书补充
-        if len(rows) < 5:
-            _expand_queue_with_ai(user_id, conn, cursor, count=2)
-            conn.commit()
-            cursor.execute("""
-                SELECT b.* FROM daily_queue q
-                JOIN books b ON q.book_id = b.id
-                WHERE q.user_id=?
-                ORDER BY q.position
-                LIMIT 5 OFFSET ?
-            """, (user_id, offset))
-            rows = cursor.fetchall()
-        
-        # 还是不够就从头补
-        if len(rows) < 5:
-            cursor.execute("""
-                SELECT b.* FROM daily_queue q
-                JOIN books b ON q.book_id = b.id
-                WHERE q.user_id=?
-                ORDER BY q.position
-                LIMIT ?
-            """, (user_id, 5 - len(rows)))
-            rows.extend(cursor.fetchall())
-        
-        conn.close()
-        return [_row_to_book(r) for r in rows]
+    else:
+        # 换一批：从书库里随机抽5本
+        cursor.execute("""
+            SELECT b.* FROM books b
+            ORDER BY RANDOM()
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
 
-    # 第一次加载，取前5本
-    cursor.execute("""
-        SELECT b.* FROM daily_queue q
-        JOIN books b ON q.book_id = b.id
-        WHERE q.user_id=?
-        ORDER BY q.position
-        LIMIT 5
-    """, (user_id,))
-    rows = cursor.fetchall()
     conn.close()
     return [_row_to_book(r) for r in rows]
 
