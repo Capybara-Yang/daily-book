@@ -1,7 +1,7 @@
 """书库 / 推荐 / 搜索 API"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from services.database import get_conn
+from services.database import get_conn, get_cached_category, save_category_cache
 from services.recommender import get_today_book, get_next_book, generate_queue, get_today_5
 from services.deepseek import generate_summary, discover_by_category
 import json
@@ -206,9 +206,22 @@ class DiscoverRequest(BaseModel):
 
 @router.post("/discover")
 async def discover(req: DiscoverRequest):
-    """按类别发现书籍 — AI 推荐入门书单"""
+    """按类别发现书籍 — AI 推荐入门书单（带缓存）"""
+    # 1. 先查缓存
+    cached = get_cached_category(req.category)
+    if cached:
+        print(f"[Discover] 命中缓存: {req.category}")
+        return {"category": req.category, "books": cached, "cached": True}
+
+    # 2. 缓存未命中 → 调 AI
     books = discover_by_category(req.category)
-    return {"category": req.category, "books": books}
+
+    # 3. 过滤 Mock 数据后缓存
+    real_books = [b for b in books if b.get("author") != "佚名" and "入门一" not in b.get("title", "") and "入门二" not in b.get("title", "")]
+    if real_books:
+        save_category_cache(req.category, real_books)
+
+    return {"category": req.category, "books": books, "cached": False}
 
 
 @router.get("/all")

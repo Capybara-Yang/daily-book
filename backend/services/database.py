@@ -94,6 +94,34 @@ def init_db():
         )
     """)
 
+    # 类别推荐缓存（discover_by_category 结果缓存）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS category_cache (
+            category TEXT PRIMARY KEY,
+            books_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 问答缓存（chat_about_book 结果缓存，按 book_id + question 哈希）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_cache (
+            cache_key TEXT PRIMARY KEY,
+            book_id TEXT,
+            question TEXT,
+            answer TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # API 用量日志（每天一行，记录当日 API 调用次数）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS api_usage_log (
+            date TEXT PRIMARY KEY,
+            count INTEGER DEFAULT 0
+        )
+    """)
+
     # 加载初始书库（或更新现有书籍的完整数据）
     with open(BOOKS_JSON, "r", encoding="utf-8") as f:
         books = json.load(f)
@@ -144,3 +172,59 @@ def get_user_survey(user_id: str) -> dict:
     if not row or not row["survey_json"]:
         return None
     return json.loads(row["survey_json"])
+
+
+# ===== 缓存函数 =====
+
+def get_cached_category(category: str) -> list | None:
+    """获取缓存的类别推荐结果"""
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT books_json FROM category_cache WHERE category=?", (category,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return json.loads(row["books_json"])
+
+
+def save_category_cache(category: str, books: list):
+    """缓存类别推荐结果"""
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO category_cache (category, books_json)
+        VALUES (?, ?)
+        ON CONFLICT(category) DO UPDATE SET books_json=excluded.books_json
+    """, (category, json.dumps(books, ensure_ascii=False)))
+    conn.commit()
+    conn.close()
+
+
+def get_cached_chat(book_id: str, question: str) -> str | None:
+    """获取缓存的问答结果"""
+    import hashlib
+    cache_key = hashlib.md5(f"{book_id}:{question}".encode()).hexdigest()
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT answer FROM chat_cache WHERE cache_key=?", (cache_key,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return row["answer"]
+
+
+def save_chat_cache(book_id: str, question: str, answer: str):
+    """缓存问答结果"""
+    import hashlib
+    cache_key = hashlib.md5(f"{book_id}:{question}".encode()).hexdigest()
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO chat_cache (cache_key, book_id, question, answer)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET answer=excluded.answer
+    """, (cache_key, book_id, question, answer))
+    conn.commit()
+    conn.close()

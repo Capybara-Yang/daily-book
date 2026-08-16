@@ -1,9 +1,12 @@
 """
 DeepSeek API 封装
 双模式：无 API Key 时使用 Mock 模式
+省 API 优化：system prompt 缓存 + 降低 max_tokens + 每日用量限制
 """
 import os
 import json
+import hashlib
+from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -11,11 +14,56 @@ from dotenv import load_dotenv
 ENV_PATH = Path(__file__).parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
-# 优先从环境变量读取，否则使用内置 Key（注意：公开仓库会暴露此 Key）
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-3411b5d1944a4df3ac1fb59da6ad57ce"
+# 只从环境变量读取，不再硬编码 Key
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 
 USE_MOCK = not DEEPSEEK_API_KEY
-print(f"[DeepSeek] 模式: {'Mock' if USE_MOCK else '真实 API'}, Key: {DEEPSEEK_API_KEY[:10] if not USE_MOCK else '无'}")
+print(f"[DeepSeek] 模式: {'Mock' if USE_MOCK else '真实 API'}, Key: {DEEPSEEK_API_KEY[:8]}...{DEEPSEEK_API_KEY[-4:] if not USE_MOCK else ''}")
+
+# ===== 每日 API 用量限制 =====
+DAILY_API_LIMIT = int(os.getenv("DEEPSEEK_DAILY_LIMIT", "80"))  # 默认每天最多 80 次调用
+
+
+def _get_today_usage() -> int:
+    """获取今日已用 API 次数"""
+    try:
+        from services.database import get_conn
+        conn = get_conn()
+        cursor = conn.cursor()
+        today = str(date.today())
+        cursor.execute("SELECT count FROM api_usage_log WHERE date=?", (today,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["count"] if row else 0
+    except Exception:
+        return 0
+
+
+def _log_api_call():
+    """记录一次 API 调用"""
+    try:
+        from services.database import get_conn
+        conn = get_conn()
+        cursor = conn.cursor()
+        today = str(date.today())
+        cursor.execute("""
+            INSERT INTO api_usage_log (date, count) VALUES (?, 1)
+            ON CONFLICT(date) DO UPDATE SET count = count + 1
+        """, (today,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DeepSeek] 用量记录失败: {e}")
+
+
+def _is_over_limit() -> bool:
+    """检查是否超过每日限制"""
+    usage = _get_today_usage()
+    if usage >= DAILY_API_LIMIT:
+        print(f"[DeepSeek] 今日已用 {usage} 次，超过限制 {DAILY_API_LIMIT}，降级到 Mock")
+        return True
+    return False
+
 
 if not USE_MOCK:
     import httpx
@@ -29,92 +77,92 @@ if not USE_MOCK:
     )
 
 
+# ===== 固定 system prompt（DeepSeek 会自动缓存相同前缀，缓存命中 90% 折扣）=====
+
+_SUMMARY_SYSTEM_PROMPT = """你是书籍摘要助手。目标用户：没时间或不愿意读完整本书的人，想快速了解书的内容和精彩部分在哪里。
+
+判断规则：
+- 叙事性作品（小说/戏剧/传记/纪实/史诗/童话等）→ 需要故事概要
+- 非叙事性作品（方法论/科普/哲学/商业/自助/技术等）→ 不需要故事概要
+
+输出 JSON 格式（不要加 markdown 代码块）：
+{
+  "one_liner": "一句话，20字以内",
+  "story_summary": "叙事性作品写200字梗概，其他留空字符串",
+  "concepts": [{"title": "标题", "explanation": "解释说明，50字以内"}],
+  "quotes": ["金句1", "金句2"],
+  "chapters": [{"title": "章节名", "summary": "一句话概要", "highlight": "最精彩的部分是什么", "excerpt": "约100-150字的原文摘录"}]
+}
+
+要求：
+- concepts 提供 3 个
+- quotes 提供 2 条（英文书用"中文翻译\\n英文原文"，中文书只用中文）
+- chapters 提供 3-5 个精华章节
+- 内容精炼、深刻、有启发性
+- 必须返回合法 JSON"""
+
+_DISCOVER_SYSTEM_PROMPT = """你是书籍推荐助手。为想了解某个领域但不太了解的用户推荐入门书。
+
+输出 JSON 格式（不要加 markdown 代码块）：
+{
+  "books": [{"title": "书名", "author": "作者", "reason": "为什么推荐这本作为入门书，30字以内"}]
+}
+
+要求：
+- 推荐 4 本书
+- 优先选择口碑好、易读、适合新手的入门书
+- 覆盖该领域不同侧面
+- 必须返回合法 JSON"""
+
+_EXTRACT_SYSTEM_PROMPT = """你是文档摘要助手。目标用户：没时间读完整文档的人，想快速了解内容和精彩部分在哪里。
+
+输出 JSON 格式（不要加 markdown 代码块）：
+{
+  "title": "简洁的标题",
+  "one_liner": "一句话概括核心内容，20字以内",
+  "concepts": [{"title": "核心要点标题", "explanation": "解释说明，50字以内"}],
+  "quotes": ["文档中的金句或重要原话1", "金句2"],
+  "chapters": [{"title": "段落/章节名", "summary": "一句话概要", "highlight": "最精彩的部分", "excerpt": "约100-150字的原文摘录"}]
+}
+
+要求：
+- concepts 提供 3 个核心要点
+- quotes 提供 2 条文档中的原话
+- chapters 提供 2-4 个精华段落
+- excerpt 必须从文档原文中直接摘取，不要改写
+- 必须基于文档实际内容，不要编造
+- 必须返回合法 JSON"""
+
+
 def generate_summary(title: str, author: str = "") -> dict:
     """
     生成书籍摘要
     返回: {"one_liner": str, "concepts": [...], "quotes": [...], "story_summary": str(可选)}
     """
-    if USE_MOCK:
+    if USE_MOCK or _is_over_limit():
         return _mock_summary(title, author)
 
-    prompt = f"""请为《{title}》（作者：{author}）生成结构化摘要。
-
-目标用户：没时间或不愿意读完整本书的人，想快速了解书的内容和精彩部分在哪里。
-
-第一步，判断这本书是否属于"叙事性作品"。以下类型都属于叙事性作品，需要故事概要：
-- 小说（长篇/中篇/短篇）
-- 戏剧、剧本（话剧/戏曲/电影剧本）
-- 传记、回忆录
-- 纪实文学、报告文学
-- 史诗、叙事诗
-- 童话、寓���故事
-- 任何以讲故事为主的作品
-
-如果不属于上述类型（如方法论、科普、哲学、商业、自助、技术类等），则不需要故事概要。
-
-第二步，根据判断结果生成摘要：
-
-如果是叙事性作品：
-- story_summary：200字内的故事梗概（讲清楚主要情节、人物、冲突、结局）
-- concepts：3 个核心主题（这本书想探讨什么，而非知识点）
-- one_liner：一句话点出本书精髓
-
-如果不是叙事性作品：
-- story_summary：留空字符串 ""
-- concepts：3 个核心概念（知识点/方法论）
-- one_liner：一句话核心观点
-
-第三步，生成章节概要：
-- 列出这本书最重要的 3-5 个章节（不是全部章节，挑最精华的）
-- 每章给一句话概要
-- 标注这章"最精彩的部分"是什么（具体到哪个观点/哪个情节/哪个案例）
-- 为每章提供一段"原文摘录"（excerpt字段）：尽量还原该章节中最精彩的约100-150字的原文片段，让用户点击精彩部分时能直接读到原文。如果是小说/戏剧，摘录最动人的情节描写或对话；如果是方法论/科普，摘录最核心的论述段落。
-
-严格按以下 JSON 格式返回（不要加 markdown 代码块）：
-
-{{
-  "one_liner": "一句话，20字以内",
-  "story_summary": "叙事性作品写200字梗概，其他留空字符串",
-  "concepts": [
-    {{"title": "标题", "explanation": "解释说明，50字以内"}}
-  ],
-  "quotes": ["金句1", "金句2"],
-  "chapters": [
-    {{"title": "章节名", "summary": "一句话概要", "highlight": "最精彩的部分是什么，具体说明", "excerpt": "约100-150字的原文摘录，尽量接近原书文字"}}
-  ]
-}}
-
-要求：
-- quotes 提供 2 条金句
-- 如果原书是英文书（作者为外国人、原著为英文），金句用中文翻译 + 换行 + 英文原文，格式为："中文翻译\n英文原文"
-- 如果原书是中文书，金句只用中文
-- chapters 提供 3-5 个精华章节
-- 内容要精炼、深刻、有启发性
-- 必须返回合法 JSON"""
+    # 短 user prompt — 固定指令已移入 system prompt（会被 DeepSeek 缓存）
+    user_msg = f'请为《{title}》（作者：{author}）生成结构化摘要。'
 
     try:
         response = client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000,
+            messages=[
+                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=2500,   # 4000 → 2500
             temperature=0.7,
         )
+        _log_api_call()
         content = response.choices[0].message.content.strip()
-        print(f"[DeepSeek] 摘要原��返回: {content[:300]}")
-        # 尝试提取 JSON
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        content = content.strip()
-        # 找到第一个 { 和最后一个 }，提取 JSON
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1:
-            content = content[start:end+1]
-        result = json.loads(content)
-        print(f"[DeepSeek] 解析成功，字段: {list(result.keys())}, chapters数: {len(result.get('chapters',[]))}")
-        return result
+        print(f"[DeepSeek] 摘要原始返回: {content[:200]}")
+        result = _extract_json(content)
+        if result:
+            print(f"[DeepSeek] 解析成功，字段: {list(result.keys())}, chapters数: {len(result.get('chapters',[]))}")
+            return result
+        return _mock_summary(title, author)
     except Exception as e:
         print(f"[DeepSeek] 生成摘要失败: {e}")
         return _mock_summary(title, author)
@@ -125,46 +173,28 @@ def discover_by_category(category: str) -> list:
     根据类别推荐 3-5 本入门书
     返回: [{"title": str, "author": str, "reason": str}]
     """
-    if USE_MOCK:
+    if USE_MOCK or _is_over_limit():
         return _mock_discover(category)
 
-    prompt = f"""用户想了解"{category}"领域的书，但他对这个领域不了解。
-请推荐 4 本最适合入门的经典书籍。
-
-严格按以下 JSON 格式返回（不要加 markdown 代码块）：
-
-{{
-  "books": [
-    {{"title": "书名", "author": "作者", "reason": "为什么推荐这本作为入门书，30字以内"}}
-  ]
-}}
-
-要求：
-- 推荐 4 本书
-- 优先选择口碑好、易读、适合新手的入门书
-- 覆盖该领域不同侧面
-- 必须返回合法 JSON"""
+    user_msg = f'用户想了解"{category}"领域的书，但他对这个领域不了解。请推荐 4 本最适合入门的经典书籍。'
 
     try:
         response = client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,
+            messages=[
+                {"role": "system", "content": _DISCOVER_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=1200,   # 2000 → 1200
             temperature=0.7,
         )
+        _log_api_call()
         content = response.choices[0].message.content.strip()
-        print(f"[DeepSeek] 发现原始返回: {content[:300]}")
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        content = content.strip()
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1:
-            content = content[start:end+1]
-        data = json.loads(content)
-        return data.get("books", [])
+        print(f"[DeepSeek] 发现原始返回: {content[:200]}")
+        result = _extract_json(content)
+        if result:
+            return result.get("books", [])
+        return _mock_discover(category)
     except Exception as e:
         print(f"[DeepSeek] 发现失败: {e}")
         return _mock_discover(category)
@@ -179,7 +209,7 @@ def _mock_discover(category: str) -> list:
 
 def chat_about_book(title: str, summary: str, question: str, history=None) -> str:
     """针对书籍内容回答问题"""
-    if USE_MOCK:
+    if USE_MOCK or _is_over_limit():
         return _mock_answer(title, question)
 
     messages = [
@@ -206,9 +236,10 @@ def chat_about_book(title: str, summary: str, question: str, history=None) -> st
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
-            max_tokens=500,
+            max_tokens=400,    # 500 → 400
             temperature=0.7,
         )
+        _log_api_call()
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[DeepSeek] 对话失败: {e}")
@@ -220,7 +251,7 @@ def extract_from_text(text: str, filename: str = "上传文档") -> dict:
     从用户上传的文本中提取重点
     返回: {"title": str, "one_liner": str, "concepts": [...], "quotes": [...], "chapters": [...]}
     """
-    if USE_MOCK:
+    if USE_MOCK or _is_over_limit():
         return {
             "title": filename,
             "one_liner": "这是一份上传的文档，AI 已提取重点。",
@@ -236,44 +267,33 @@ def extract_from_text(text: str, filename: str = "上传文档") -> dict:
     # 截取前 4000 字避免 token 超限
     truncated = text[:4000] if len(text) > 4000 else text
 
-    prompt = f"""用户上传了一份文档（文件名：{filename}），请提取重点内容。
-
-目标用户：没时间读完整文档的人，想快速了解内容和精彩部分在哪里。
-
-严格按以下 JSON 格式返回（不要加 markdown 代码块）：
-
-{{
-  "title": "给这份文档起一个简洁的标题",
-  "one_liner": "一句话概括核心内容，20字以内",
-  "concepts": [
-    {{"title": "核心要点标题", "explanation": "解释说明，50字以内"}}
-  ],
-  "quotes": ["文档中的金句或重要原话1", "金句2"],
-  "chapters": [
-    {{"title": "段落/章节名", "summary": "一句话概要", "highlight": "最精彩的部分是什么", "excerpt": "约100-150字的原文摘录"}}
-  ]
-}}
-
-要求：
-- concepts 提供 3 个核心要点
-- quotes 提供 2 条文档中的原话
-- chapters 提供 2-4 个精华段落
-- excerpt 必须从文档原文中直接摘取，不要改写
-- 必须基于文档实际内容，不要编造
-- 必须返回合法 JSON
-
-文档内容：
-{truncated}"""
+    user_msg = f'用户上传了一份文档（文件名：{filename}），请提取重点内容。\n\n文档内容：\n{truncated}'
 
     try:
         response = client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=3000,
+            messages=[
+                {"role": "system", "content": _EXTRACT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=2000,   # 3000 → 2000
             temperature=0.5,
         )
+        _log_api_call()
         content = response.choices[0].message.content.strip()
-        print(f"[DeepSeek] 提取原始返回: {content[:300]}")
+        print(f"[DeepSeek] 提取原始返回: {content[:200]}")
+        result = _extract_json(content)
+        if result:
+            return result
+        return {"title": filename, "one_liner": "提取失败", "concepts": [], "quotes": [], "chapters": []}
+    except Exception as e:
+        print(f"[DeepSeek] 提取失败: {e}")
+        return {"title": filename, "one_liner": "提取失败", "concepts": [], "quotes": [], "chapters": []}
+
+
+def _extract_json(content: str) -> dict | None:
+    """从 API 返回中提取 JSON（统一处理）"""
+    try:
         if "```" in content:
             content = content.split("```")[1]
             if content.startswith("json"):
@@ -284,9 +304,8 @@ def extract_from_text(text: str, filename: str = "上传文档") -> dict:
         if start != -1 and end != -1:
             content = content[start:end+1]
         return json.loads(content)
-    except Exception as e:
-        print(f"[DeepSeek] 提取失败: {e}")
-        return {"title": filename, "one_liner": "提取失败", "concepts": [], "quotes": [], "chapters": []}
+    except Exception:
+        return None
 
 
 # ===== Mock 模式 =====

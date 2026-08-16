@@ -17,7 +17,7 @@ load_dotenv()
 from api import books, chat, survey, user, upload
 from services.database import init_db
 from services.scheduler import start_scheduler
-from services.deepseek import USE_MOCK
+from services.deepseek import USE_MOCK, DAILY_API_LIMIT, _get_today_usage
 
 # 前端静态文件路径
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -52,7 +52,12 @@ app.include_router(upload.router, prefix="/api/upload", tags=["上传"])
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "mock_mode": USE_MOCK}
+    return {
+        "status": "ok",
+        "mock_mode": USE_MOCK,
+        "api_usage_today": _get_today_usage(),
+        "api_daily_limit": DAILY_API_LIMIT,
+    }
 
 
 # 托管前端静态文件（PWA 资源）
