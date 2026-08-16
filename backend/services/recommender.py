@@ -94,40 +94,131 @@ def generate_queue(user_id: str, queue_size: int = 10) -> list:
 
 
 def get_today_5(user_id: str, offset: int = 0) -> list:
-    """获取今日推荐5本书，每次换一批随机抽不同的书"""
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    # 检查队列是否存在
-    cursor.execute("SELECT COUNT(*) as cnt FROM daily_queue WHERE user_id=?", (user_id,))
-    if cursor.fetchone()["cnt"] == 0:
-        conn.close()
-        generate_queue(user_id, queue_size=30)
-        conn = get_conn()
-        cursor = conn.cursor()
-
-    if offset == 0:
-        # 第一次：取���5本
+    """
+    获取今日推荐5本书。
+    offset 按队列顺序翻页（第0页=前5本，第1页=第6-10本...），看过的不再重复出现。
+    翻到队尾时：先尝试 AI 批量补货（1次调用补6本，受每日限额保护），
+    补不到就重新洗牌从头开始。
+    """
+    def _page(cursor, off):
         cursor.execute("""
             SELECT b.* FROM daily_queue q
             JOIN books b ON q.book_id = b.id
             WHERE q.user_id=?
             ORDER BY q.position
-            LIMIT 5
-        """, (user_id,))
-        rows = cursor.fetchall()
-    else:
-        # 换一批：从书库里随机抽5本
-        cursor.execute("""
-            SELECT b.* FROM books b
-            ORDER BY RANDOM()
-            LIMIT 5
-        """)
-        rows = cursor.fetchall()
+            LIMIT 5 OFFSET ?
+        """, (user_id, off))
+        return cursor.fetchall()
+
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    # 检查队列是否存在（书库扩容后用更长的队列）
+    cursor.execute("SELECT COUNT(*) as cnt FROM daily_queue WHERE user_id=?", (user_id,))
+    if cursor.fetchone()["cnt"] == 0:
+        conn.close()
+        generate_queue(user_id, queue_size=60)
+        conn = get_conn()
+        cursor = conn.cursor()
+
+    rows = _page(cursor, offset)
+
+    # 翻到队尾 -> 先 AI 批量补货，再重新洗牌
+    if not rows:
+        conn.close()
+        added = _restock_library_batch(user_id)
+        generate_queue(user_id, queue_size=60)
+        conn = get_conn()
+        cursor = conn.cursor()
+        # 补到了新书就从当前页继续翻；没补到就从头翻
+        rows = _page(cursor, offset if added else 0)
+        if not rows:
+            rows = _page(cursor, 0)
 
     conn.close()
     return [_row_to_book(r) for r in rows]
 
+
+def _is_duplicate_title(title: str, existing_titles: list) -> bool:
+    """书名模糊去重（防止"1984"和"一九八四"这类重复）"""
+    import re as _re
+    clean_t = _re.sub(r'[\s，。、！？《》\[\]（）:：.·\-—\'\"]', '', title).lower()
+    if not clean_t:
+        return True
+    for existing in existing_titles:
+        clean_e = _re.sub(r'[\s，。、！？《》\[\]（）:：.·\-—\'\"]', '', existing).lower()
+        if not clean_e:
+            continue
+        if clean_t == clean_e:
+            return True
+        if len(clean_t) > 1 and len(clean_e) > 1 and (clean_t in clean_e or clean_e in clean_t):
+            return True
+    return False
+
+
+def _restock_library_batch(user_id: str, count: int = 6) -> int:
+    """
+    书库全部翻完后，AI 一次调用批量补充新书（1 次调用 = 6 本完整资料，省 token）。
+    受每日 API 限额保护：超限/失败返回 0，调用方回退到重新洗牌。
+    """
+    import uuid as _uuid
+    from services.deepseek import generate_books_batch
+
+    survey = get_user_survey(user_id)
+    categories = survey.get("categories", []) if survey else []
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT title FROM books")
+    existing_titles = [r["title"] for r in cursor.fetchall()]
+    conn.close()
+
+    # 轮换类别：优先用户兴趣类别
+    cat = random.choice(categories) if categories else "经典好书"
+
+    try:
+        new_books = generate_books_batch(cat, count=count, exclude_titles=existing_titles)
+    except Exception as e:
+        print(f"[Recommender] AI批量补货失败: {e}")
+        new_books = []
+
+    added = 0
+    if new_books:
+        conn = get_conn()
+        cursor = conn.cursor()
+        for nb in new_books:
+            if added >= count:
+                break
+            title = (nb.get("title") or "").strip()
+            author = (nb.get("author") or "").strip()
+            if not title or not author or author == "佚名":
+                continue
+            if _is_duplicate_title(title, existing_titles):
+                continue
+            concepts = nb.get("concepts") or []
+            quotes = nb.get("quotes") or []
+            if len(concepts) < 2 or len(quotes) < 1:
+                continue
+            book_id = str(_uuid.uuid4())[:8]
+            cursor.execute("""
+                INSERT OR IGNORE INTO books (id, title, author, category, one_liner, concepts, quotes, story_summary, chapters, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_batch')
+            """, (
+                book_id, title, author, cat,
+                nb.get("one_liner", ""),
+                json.dumps(concepts, ensure_ascii=False),
+                json.dumps(quotes, ensure_ascii=False),
+                nb.get("story_summary", ""),
+                json.dumps([], ensure_ascii=False),
+            ))
+            if cursor.rowcount:
+                existing_titles.append(title)
+                added += 1
+        conn.commit()
+        conn.close()
+
+    print(f"[Recommender] AI批量补货: 类别「{cat}」新增 {added} 本")
+    return added
 
 def _expand_queue_with_ai(user_id: str, conn, cursor, count=5):
     """用AI生成新书并补充到队列"""

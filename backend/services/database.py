@@ -123,8 +123,16 @@ def init_db():
     """)
 
     # 加载初始书库（或更新现有书籍的完整数据）
-    with open(BOOKS_JSON, "r", encoding="utf-8") as f:
-        books = json.load(f)
+    # 主书库 + 扩充书库（多个文件，自动合并，ID 去重）
+    books = []
+    for json_name in ["books.json", "books_expansion_1.json", "books_expansion_2.json"]:
+        json_path = Path(__file__).parent.parent / "data" / json_name
+        if json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as f:
+                books.extend(json.load(f))
+    # 按 id 去重（保留先出现的）
+    seen_ids = set()
+    books = [b for b in books if not (b["id"] in seen_ids or seen_ids.add(b["id"]))]
     for b in books:
         cursor.execute("""
             INSERT INTO books (id, title, author, category, one_liner, concepts, quotes, story_summary, chapters, source)

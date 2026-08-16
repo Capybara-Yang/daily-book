@@ -207,6 +207,62 @@ def _mock_discover(category: str) -> list:
     ]
 
 
+_BATCH_SYSTEM_PROMPT = """你是书籍推荐助手。为书库批量生成新书资料。
+
+输出 JSON 格式（不要加 markdown 代码块）：
+{
+  "books": [
+    {
+      "title": "书名",
+      "author": "作者",
+      "one_liner": "一句话核心，20字以内",
+      "story_summary": "100字以内简介",
+      "concepts": [{"title": "标题", "explanation": "解释，40字以内"}],
+      "quotes": ["金句1", "金句2"]
+    }
+  ]
+}
+
+要求：
+- 每本书 concepts 3 个、quotes 2 条
+- 只推荐真实存在、口碑好的经典书
+- 不要与排除列表中的书重复（含同一本书的不同译名）
+- 必须返回合法 JSON"""
+
+
+def generate_books_batch(category: str, count: int = 6, exclude_titles: list = None) -> list:
+    """
+    一次 API 调用批量生成 count 本完整新书（省 token：1 次调用 = 6 本书完整资料）
+    返回: [{"title", "author", "one_liner", "story_summary", "concepts", "quotes"}]
+    """
+    if USE_MOCK or _is_over_limit():
+        return []
+
+    exclude = exclude_titles or []
+    exclude_str = "、".join(exclude[:80]) if exclude else "（书库暂时为空）"
+    user_msg = f'请为"{category}"类别推荐 {count} 本经典好书并生成完整资料。书库已有以下书，不要重复推荐：{exclude_str}'
+
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": _BATCH_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=2800,
+            temperature=0.8,
+        )
+        _log_api_call()
+        content = response.choices[0].message.content.strip()
+        print(f"[DeepSeek] 批量生成原始返回: {content[:200]}")
+        result = _extract_json(content)
+        if result:
+            return result.get("books", [])
+    except Exception as e:
+        print(f"[DeepSeek] 批量生成失败: {e}")
+    return []
+
+
 def chat_about_book(title: str, summary: str, question: str, history=None) -> str:
     """针对书籍内容回答问题"""
     if USE_MOCK or _is_over_limit():
