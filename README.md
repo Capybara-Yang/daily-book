@@ -4,9 +4,9 @@
 
 ## 在线预览
 
-👉 **[点击打开 Railway 部署版](https://daily-book-production.up.railway.app/)**
+👉 **部署在 Render 免费版**（15 分钟无访问会休眠，首次打开需等几秒唤醒）
 
-> Railway 免费额度：30 天或 $5 试用，之后需要升级或迁移。
+> 原部署于 Railway，因试用额度到期已迁移至 Render。
 
 ## 功能
 

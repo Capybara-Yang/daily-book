@@ -1,0 +1,16 @@
+# Render 部署配置 — 每日一书
+# 在 Render 控制台选择 "New + → Blueprint" 即可自动识别此配置
+services:
+  - type: web
+    name: daily-book
+    runtime: python
+    plan: free                      # 免费版：15 分钟无访问会休眠，首次访问慢几秒
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: DEEPSEEK_DAILY_LIMIT
+        value: "80"                 # 每日 API 调用上限，超过自动降级 Mock
+      # DEEPSEEK_API_KEY 请在 Render 控制台的 Environment 页手动添加（私密信息不写入仓库）
